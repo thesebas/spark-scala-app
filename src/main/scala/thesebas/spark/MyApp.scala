@@ -36,8 +36,8 @@ object MyApp {
 
     }
 
-    val readTable = ""
-    val saveTable = ""
+    val readTable = "view1"
+    val saveTable = "cockpit2_testIndex"
 
 
 
@@ -46,7 +46,8 @@ object MyApp {
       Map(
         "name" -> "androidN",
         "tag" -> "chanel:android",
-        "budget" -> 100f)
+        "budget" -> 100f
+      )
       ,
       Map(
         "name" -> "kaspersky",
@@ -61,8 +62,8 @@ object MyApp {
     )
 
     val data = sc.cassandraTable[MyRow]("el_test", readTable)
-      .select("Url", "Date", "tags", "revs", "rev", "pic", "pif", "pi")
-      .where("Date = 2015-10-01")
+      .select("url", "date", "tags", "revs", "rev", "pic", "pif", "pi")
+      .where("date = ?", "2015-10-01")
 
 
 
@@ -92,8 +93,9 @@ object MyApp {
       .map(calculateCampaign)
       .map(sumRevenues)
 
-    calculated.saveToCassandra("el_test", saveTable)
+    calculated.saveToCassandra("el_test", saveTable, SomeColumns("url", "date", "revs", "rev"))
 
+    sc.stop()
   }
 }
 
