@@ -4,18 +4,19 @@ import java.sql.Date
 
 import org.apache.spark.{SparkConf, SparkContext}
 import com.datastax.spark.connector._
+import com.datastax.spark.connector.rdd.CassandraTableScanRDD
 
 //import SparkContext._
-case class MyRow(
-                  Url: String,
-                  Date: Date,
-                  tags: Set[String],
-                  var revs: Map[String, Float],
-                  var rev: Float,
-                  pic: Float,
-                  pif: Float,
-                  pi: Int
-                )
+case class UrlRow(
+                   Url: String,
+                   Date: Date,
+                   tags: Set[String],
+                   var revs: Map[String, Float],
+                   var rev: Float,
+                   pic: Float,
+                   pif: Float,
+                   pi: Int
+                 )
 
 /**
   * Created by thesebas on 2016-03-30.
@@ -36,10 +37,10 @@ object MyApp {
 
     }
 
-    val readTable = "view1"
-    val saveTable = "cockpit2_testIndex"
+    val readTable = if (args.isDefinedAt(0)) args.head else "cockpit2_testTogether"
+    val saveTable = if (args.isDefinedAt(1)) args(1) else readTable
 
-
+    Console.println(s"reading from $readTable and writing back to $saveTable")
 
 
     val campaigns = List(
@@ -56,18 +57,68 @@ object MyApp {
       )
     )
 
-    val pisPerTag = Map(
-      "chanel:android" -> 1500,
-      "chanel:software" -> 2500
-    )
 
-    val data = sc.cassandraTable[MyRow]("el_test", readTable)
+    val readTableRDD: CassandraTableScanRDD[UrlRow] = sc.cassandraTable[UrlRow]("el_test", readTable)
+
+    /*
+
+    def map_tags_to_pis(row):
+        if row['tags'] is None:
+            return [('invalid', 1)]
+        ret = [(tag, row['pi'] * row['pif']) for tag in row['tags']]
+        ret.append(('processed', 1))
+        return ret
+
+
+    pisPerTag = rdd.select("url", "date", "counts", "cnt", "pi", "tags", "pif") \
+        .where('"date" = ? ', processedDate) \
+        .flatMap(map_tags_to_pis) \
+        .reduceByKey(lambda a, b: a + b) \
+        .collectAsMap()
+
+     */
+
+    def mapRowTagsToPis(row: UrlRow): List[(String, Int)] = {
+      if (row.tags.isEmpty) {
+        return List(("invalid", 1))
+      }
+      (for (tag <- row.tags) yield (tag, 1)).toList
+
+    }
+    def mapTagsToPis(tags: Set[String]): List[(String, Int)] = {
+      if (tags.isEmpty) {
+        return List(("invalid", 1))
+      }
+      (for (tag <- tags) yield (tag, 1)).toList
+
+    }
+
+
+    val pisPerTagRDD = sc.cassandraTable[(Set[String])]("el_test", readTable)
+      .select("tags")
+      .where("date = ?", "2015-10-01")
+      .flatMap(mapTagsToPis)
+      .reduceByKey(_ + _)
+
+    //    pisPerTagRDD.saveAsTextFile("/www/ssz/pisperTag")
+
+    val pisPerTag = pisPerTagRDD.collectAsMap()
+
+    Console.println(pisPerTag)
+
+    //    val pisPerTag = Map(
+    //      "chanel:android" -> 1500,
+    //      "chanel:software" -> 2500
+    //    )
+
+
+    val data = readTableRDD
       .select("url", "date", "tags", "revs", "rev", "pic", "pif", "pi")
       .where("date = ?", "2015-10-01")
 
 
 
-    def calculateCampaign(row: MyRow): MyRow = {
+    def calculateCampaign(row: UrlRow): UrlRow = {
       val pic = row.pi * row.pif
 
       for (campaign <- campaigns) {
@@ -81,9 +132,9 @@ object MyApp {
       row
     }
 
-    def sumRevenues(row: MyRow): MyRow = {
+    def sumRevenues(row: UrlRow): UrlRow = {
       val rev = row.revs.values.sum
-      //MyRow(row.Url, row.Date, row.tags, row.revs, rev, row.pic, row.pif, row.pi)
+      //CalculateRevenueRow(row.Url, row.Date, row.tags, row.revs, rev, row.pic, row.pif, row.pi)
       row.rev = rev
       row
     }
