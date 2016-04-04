@@ -37,8 +37,8 @@ object MyApp {
 
     }
 
-    val readTable = if (args.isDefinedAt(0)) args.head else "cockpit2_testTogether"
-    val saveTable = if (args.isDefinedAt(1)) args(1) else readTable
+    val readTable = args.lift(0).getOrElse("cockpit2_testTogether")
+    val saveTable = args.lift(1).getOrElse(readTable)
 
     Console.println(s"reading from $readTable and writing back to $saveTable")
 
