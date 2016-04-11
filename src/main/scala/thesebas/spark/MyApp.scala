@@ -5,24 +5,23 @@ import java.sql.Date
 import org.apache.spark.{SparkConf, SparkContext}
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.rdd.CassandraTableScanRDD
+import org.apache.log4j.Logger
 
-//import SparkContext._
-case class UrlRow(
-                   Url: String,
-                   Date: Date,
-                   tags: Set[String],
-                   var revs: Map[String, Float],
-                   var rev: Float,
-                   pic: Float,
-                   pif: Float,
-                   pi: Int
-                 )
 
 /**
   * Created by thesebas on 2016-03-30.
   */
 object MyApp {
   val AppName = "MyApp"
+  val logger = Logger.getLogger(AppName)
+
+  def time[R](label: String, block: => R): R = {
+    val start = System.nanoTime()
+    val result = block
+    val end = System.nanoTime()
+    logger.info(s"TIMER: [$label] elapsed time ${(end - start)/1e6}")
+    result
+  }
 
   def execute(master: Option[String], args: List[String], jars: Seq[String] = Nil): Unit = {
 
@@ -40,7 +39,7 @@ object MyApp {
     val readTable = args.lift(0).getOrElse("cockpit2_testTogether")
     val saveTable = args.lift(1).getOrElse(readTable)
 
-    Console.println(s"reading from $readTable and writing back to $saveTable")
+    logger.info(s"reading from $readTable and writing back to $saveTable")
 
 
     val campaigns = List(
@@ -57,6 +56,7 @@ object MyApp {
       )
     )
 
+    val processedDay = "2015-10-01"
 
     val readTableRDD: CassandraTableScanRDD[UrlRow] = sc.cassandraTable[UrlRow]("el_test", readTable)
 
@@ -96,15 +96,18 @@ object MyApp {
 
     val pisPerTagRDD = sc.cassandraTable[(Set[String])]("el_test", readTable)
       .select("tags")
-      .where("date = ?", "2015-10-01")
+      .where("date = ?", processedDay)
       .flatMap(mapTagsToPis)
       .reduceByKey(_ + _)
 
     //    pisPerTagRDD.saveAsTextFile("/www/ssz/pisperTag")
 
-    val pisPerTag = pisPerTagRDD.collectAsMap()
+    val pisPerTag = time("collect as map", {
 
-    Console.println(pisPerTag)
+      pisPerTagRDD.collectAsMap()
+    })
+
+    //    Console.println(pisPerTag)
 
     //    val pisPerTag = Map(
     //      "chanel:android" -> 1500,
@@ -114,7 +117,7 @@ object MyApp {
 
     val data = readTableRDD
       .select("url", "date", "tags", "revs", "rev", "pic", "pif", "pi")
-      .where("date = ?", "2015-10-01")
+      .where("date = ?", processedDay)
 
 
 
@@ -144,7 +147,9 @@ object MyApp {
       .map(calculateCampaign)
       .map(sumRevenues)
 
-    calculated.saveToCassandra("el_test", saveTable, SomeColumns("url", "date", "revs", "rev"))
+    time("calculate and save", {
+      calculated.saveToCassandra("el_test", saveTable, SomeColumns("url", "date", "revs", "rev"))
+    })
 
     sc.stop()
   }
