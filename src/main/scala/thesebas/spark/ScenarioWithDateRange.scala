@@ -46,55 +46,56 @@ object ScenarioWithDateRange {
     val readTable = args.lift(0).getOrElse("cockpit2_testTogether")
     val saveTable = args.lift(1).getOrElse(readTable)
 
-    logger.info(s"reading from $readTable and writing back to $saveTable")
+    val processedDay = "2015-10-01"
+    val processedToDay = "2015-10-10"
+
+    logger.info(s"reading from $readTable and writing back to $saveTable, date range:[$processedDay:$processedToDay]")
 
 
     val campaigns = List(
       Map(
         "name" -> "androidN",
-        "tag" -> "chanel:android",
+        "tag" -> "channel:android",
         "budget" -> 100f
       )
       ,
       Map(
         "name" -> "kaspersky",
-        "tag" -> "chanel:software",
+        "tag" -> "channel:software",
         "budget" -> 150f
       )
     )
 
     logger.info("campaigns definitions ready");
 
-    val processedDay = "2015-10-01"
-    val processedToDay = "2015-10-10"
+
 
     val readTableRDD: CassandraTableScanRDD[UrlRow] = sc.cassandraTable[UrlRow]("el_test", readTable)
 
-    def mapTagsToPis(date: Date, tags: Set[String]): List[((Date, String), Int)] = {
+    def mapTagsToPis(date: Date, tags: Set[String], pic: Double): List[((Date, String), Double)] = {
       if (tags.isEmpty) {
-        return List(((date, "invalid"), 1))
+        return List(((date, "invalid"), 1d))
       }
-      (for (tag <- tags) yield ((date, tag), 1)).toList
-
+      //tags.toList.map(tag => ((date, tag), 1))
+      for (tag <- tags.toList) yield ((date, tag), pic)
     }
 
-    val pisPerTagRDD = sc.cassandraTable[(Date, Set[String])]("el_test", readTable)
-      .select("date", "tags")
-      .where("date > ? AND date < ?", processedDay, processedToDay)
-      .flatMap[((Date, String), Int)]({ case (d: Date, s: Set[String]) => mapTagsToPis(d, s) })
+    val pisPerTagRDD = sc.cassandraTable[(Date, Set[String], Int, Double)]("el_test", readTable)
+      .select("date", "tags", "pi", "pif")
+      .where("date >= ? AND date < ?", processedDay, processedToDay)
+      .flatMap[((Date, String), Double)] { case (d: Date, s: Set[String], pi: Int, pif: Double) => mapTagsToPis(d, s, pi * pif) }
       .reduceByKey(_ + _)
       .persist()
 
-    pisPerTagRDD
-      .map { case ((date: Date, tag: String), pi: Int) => (tag, date, pi) }
-      .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
-
+    time("save pis per tag per day to cassandra", {
+      pisPerTagRDD
+        .map { case ((date: Date, tag: String), pi: Double) => (tag, date, pi) }
+        .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
+    })
 
     val pisPerTag = time("collect as map", {
       pisPerTagRDD.collectAsMap()
     })
-
-    Console.println(pisPerTag)
 
     //    val pisPerTag = Map(
     //      "chanel:android" -> 1500,
@@ -103,8 +104,7 @@ object ScenarioWithDateRange {
 
     val data = readTableRDD
       .select("url", "date", "tags", "revs", "rev", "pic", "pif", "pi")
-      .where("date >= ? AND date <= ? ", processedDay, processedToDay)
-
+      .where("date >= ? AND date < ? ", processedDay, processedToDay)
 
 
     def calculateCampaign(row: UrlRow): UrlRow = {
@@ -130,18 +130,16 @@ object ScenarioWithDateRange {
       row
     }
 
-    def sumRevenues(row: UrlRow): UrlRow = {
-      val rev = row.revs.values.sum
-      row.rev = rev
-      row
+    def sumRevenues(row: UrlRow): (String, Date, Map[String, Double], Int) = {
+      (row.Url, row.Date, row.revs, (row.revs.values.sum*1e6).round.toInt)
     }
 
 
     val calculated = data
-      .map(calculateCampaign)
+        .map(calculateCampaign)
       .map(sumRevenues)
 
-    time("save to cassandra", {
+    time("process and save to cassandra", {
       calculated.saveToCassandra("el_test", saveTable, SomeColumns("url", "date", "revs", "rev"))
     })
 

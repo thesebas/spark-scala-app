@@ -19,7 +19,7 @@ object MyApp {
     val start = System.nanoTime()
     val result = block
     val end = System.nanoTime()
-    logger.info(s"TIMER: [$label] elapsed time ${(end - start)/1e6}")
+    logger.info(s"TIMER: [$label] elapsed time ${(end - start) / 1e6}")
     result
   }
 
@@ -45,18 +45,18 @@ object MyApp {
     val campaigns = List(
       Map(
         "name" -> "androidN",
-        "tag" -> "chanel:android",
+        "tag" -> "channel:android",
         "budget" -> 100f
       )
       ,
       Map(
         "name" -> "kaspersky",
-        "tag" -> "chanel:software",
+        "tag" -> "channel:software",
         "budget" -> 150f
       )
     )
 
-    val processedDay = "2015-10-01"
+    val processedDay = "2015-10-08"
 
     val readTableRDD: CassandraTableScanRDD[UrlRow] = sc.cassandraTable[UrlRow]("el_test", readTable)
 
@@ -78,40 +78,45 @@ object MyApp {
 
      */
 
-    def mapRowTagsToPis(row: UrlRow): List[(String, Int)] = {
+    def mapRowTagsToPis(row: UrlRow): List[(String, Double)] = {
       if (row.tags.isEmpty) {
-        return List(("invalid", 1))
+        return List(("invalid", 1d))
       }
-      (for (tag <- row.tags) yield (tag, 1)).toList
 
+      for (tag <- row.tags.toList) yield (tag, row.pi * row.pif)
     }
-    def mapTagsToPis(tags: Set[String]): List[(String, Int)] = {
+
+    def mapTagsToPis(date: Date, tags: Set[String], pic: Double): List[((Date, String), Double)] = {
       if (tags.isEmpty) {
-        return List(("invalid", 1))
+        return List(((date, "invalid"), 1d))
       }
-      (for (tag <- tags) yield (tag, 1)).toList
 
+      for (tag <- tags.toList) yield ((date, tag), pic)
     }
 
 
-    val pisPerTagRDD = sc.cassandraTable[(Set[String])]("el_test", readTable)
-      .select("tags")
+    val pisPerTagRDD = sc.cassandraTable[(Date, Set[String], Int, Double)]("el_test", readTable)
+      .select("date", "tags", "pi", "pif")
       .where("date = ?", processedDay)
-      .flatMap(mapTagsToPis)
+      .flatMap { case (date: Date, tags: Set[String], pi: Int, pif: Double) => mapTagsToPis(date, tags, pi * pif) }
       .reduceByKey(_ + _)
+      .persist()
 
-    //    pisPerTagRDD.saveAsTextFile("/www/ssz/pisperTag")
+    time("save pis per tag per day", {
+      pisPerTagRDD
+        .map { case ((date: Date, tag: String), pi: Double) => (tag, date, pi) }
+        .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
+    })
 
     val pisPerTag = time("collect as map", {
-
       pisPerTagRDD.collectAsMap()
     })
 
     //    Console.println(pisPerTag)
 
     //    val pisPerTag = Map(
-    //      "chanel:android" -> 1500,
-    //      "chanel:software" -> 2500
+    //      ("2015-10-10", "chanel:android") -> 1500,
+    //      ("2015-10-10","chanel:software") -> 2500
     //    )
 
 
@@ -127,7 +132,7 @@ object MyApp {
       for (campaign <- campaigns) {
         val campaignTag = campaign("tag").asInstanceOf[String]
         if (row.tags.contains(campaignTag)) {
-          val rev = pic / pisPerTag(campaignTag) * campaign("budget").asInstanceOf[Float]
+          val rev = pic / pisPerTag((row.Date, campaignTag)) * campaign("budget").asInstanceOf[Float]
           row.revs = row.revs ++ Map("cp_" + campaign("name").asInstanceOf[String] -> rev)
         }
       }
