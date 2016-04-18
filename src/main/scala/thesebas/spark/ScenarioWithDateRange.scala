@@ -52,22 +52,23 @@ object ScenarioWithDateRange {
     logger.info(s"reading from $readTable and writing back to $saveTable, date range:[$processedDay:$processedToDay]")
 
 
-    val campaigns = List(
-      Map(
-        "name" -> "androidN",
-        "tag" -> "channel:android",
-        "budget" -> 100f
-      )
-      ,
-      Map(
-        "name" -> "kaspersky",
-        "tag" -> "channel:software",
-        "budget" -> 150f
-      )
-    )
+    val bcampaigns = time("broadcast campaign data", {
+      sc.broadcast(List(
+        Map(
+          "name" -> "androidN",
+          "tag" -> "channel:android",
+          "budget" -> 100f
+        )
+        ,
+        Map(
+          "name" -> "kaspersky",
+          "tag" -> "channel:software",
+          "budget" -> 150f
+        )
+      ))
+    })
 
     logger.info("campaigns definitions ready");
-
 
 
     val readTableRDD: CassandraTableScanRDD[UrlRow] = sc.cassandraTable[UrlRow]("el_test", readTable)
@@ -87,14 +88,19 @@ object ScenarioWithDateRange {
       .reduceByKey(_ + _)
       .persist()
 
-    time("save pis per tag per day to cassandra", {
-      pisPerTagRDD
-        .map { case ((date: Date, tag: String), pi: Double) => (tag, date, pi) }
-        .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
-    })
+//    time("save pis per tag per day to cassandra", {
+//      pisPerTagRDD
+//        .map { case ((date: Date, tag: String), pi: Double) => (tag, date, pi) }
+//        .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
+//    })
 
-    val pisPerTag = time("collect as map", {
-      pisPerTagRDD.collectAsMap()
+
+    val bpisPerTag = time("broadcast pisPerTag", {
+      sc.broadcast({
+        time("collect as map", {
+          pisPerTagRDD.collectAsMap()
+        })
+      })
     })
 
     //    val pisPerTag = Map(
@@ -109,6 +115,9 @@ object ScenarioWithDateRange {
 
     def calculateCampaign(row: UrlRow): UrlRow = {
       val pic = row.pi * row.pif
+
+      val campaigns = bcampaigns.value
+      val pisPerTag = bpisPerTag.value
 
       for (campaign <- campaigns) {
         val campaignTag = campaign("tag") match {
@@ -131,12 +140,12 @@ object ScenarioWithDateRange {
     }
 
     def sumRevenues(row: UrlRow): (String, Date, Map[String, Double], Int) = {
-      (row.Url, row.Date, row.revs, (row.revs.values.sum*1e6).round.toInt)
+      (row.Url, row.Date, row.revs, (row.revs.values.sum * 1e6).round.toInt)
     }
 
 
     val calculated = data
-        .map(calculateCampaign)
+      .map(calculateCampaign)
       .map(sumRevenues)
 
     time("process and save to cassandra", {
@@ -146,4 +155,5 @@ object ScenarioWithDateRange {
 
     sc.stop()
   }
+
 }

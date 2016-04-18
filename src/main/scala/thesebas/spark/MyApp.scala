@@ -42,19 +42,21 @@ object MyApp {
     logger.info(s"reading from $readTable and writing back to $saveTable")
 
 
-    val campaigns = List(
-      Map(
-        "name" -> "androidN",
-        "tag" -> "channel:android",
-        "budget" -> 100f
-      )
-      ,
-      Map(
-        "name" -> "kaspersky",
-        "tag" -> "channel:software",
-        "budget" -> 150f
-      )
-    )
+    val bcampaigns = time("broadcast campaign data", {
+      sc.broadcast(List(
+        Map(
+          "name" -> "androidN",
+          "tag" -> "channel:android",
+          "budget" -> 100f
+        )
+        ,
+        Map(
+          "name" -> "kaspersky",
+          "tag" -> "channel:software",
+          "budget" -> 150f
+        )
+      ))
+    })
 
     val processedDay = "2015-10-08"
 
@@ -102,16 +104,19 @@ object MyApp {
       .reduceByKey(_ + _)
       .persist()
 
-    time("save pis per tag per day", {
-      pisPerTagRDD
-        .map { case ((date: Date, tag: String), pi: Double) => (tag, date, pi) }
-        .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
-    })
+//    time("save pis per tag per day", {
+//      pisPerTagRDD
+//        .map { case ((date: Date, tag: String), pi: Double) => (tag, date, pi) }
+//        .saveToCassandra("el_test", "pisPerTagPerDate", SomeColumns("tag", "date", "pi"))
+//    })
 
-    val pisPerTag = time("collect as map", {
-      pisPerTagRDD.collectAsMap()
+    val bpisPerTag = time("broadcast pisPerTag", {
+      sc.broadcast({
+        time("collect as map", {
+          pisPerTagRDD.collectAsMap()
+        })
+      })
     })
-
     //    Console.println(pisPerTag)
 
     //    val pisPerTag = Map(
@@ -128,6 +133,9 @@ object MyApp {
 
     def calculateCampaign(row: UrlRow): UrlRow = {
       val pic = row.pi * row.pif
+
+      val campaigns = bcampaigns.value
+      val pisPerTag = bpisPerTag.value
 
       for (campaign <- campaigns) {
         val campaignTag = campaign("tag").asInstanceOf[String]
